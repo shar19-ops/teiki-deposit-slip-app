@@ -408,7 +408,7 @@
 <div id="print-area"></div>
 
 <header>
-  <h1>入金伝票(定期券・払戻) <span class="app-version">v20261112a</span></h1>
+  <h1>入金伝票(定期券・払戻) <span class="app-version">v20261118a</span></h1>
   <span>入力フォーム</span>
   <div class="btn-bar">
     <button class="btn-secondary" onclick="loadData()">📂 読み込む</button>
@@ -1055,7 +1055,7 @@ for (let i = 0; i < NUM_ROWS; i++) {
   const tr = document.createElement('tr');
   tr.innerHTML = `
     <td class="row-no">${i + 1}</td>
-    <td><input type="text" id="customer_${i}" placeholder=""></td>
+    <td><textarea id="customer_${i}" rows="2" placeholder=""></textarea></td>
     <td><textarea id="summary_${i}" rows="2" placeholder=""></textarea></td>
     <td class="account-cell">
       <select id="account_${i}" class="account-select" onchange="renderAccountDisplay('account_${i}')">${buildAccountOptions()}</select>
