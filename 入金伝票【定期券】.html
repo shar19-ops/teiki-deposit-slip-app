@@ -401,6 +401,8 @@
   body:not(.acc-mode) [data-acc].btn-secondary {
     pointer-events: none; opacity: 0.5;
   }
+  /* 金額欄（桁区切り付きの文字の欄）は右寄せ */
+  input.amount-input { text-align: right; }
 </style>
 </head>
 <body>
@@ -408,7 +410,7 @@
 <div id="print-area"></div>
 
 <header>
-  <h1>入金伝票(定期券・払戻) <span class="app-version">v20261118a</span></h1>
+  <h1>入金伝票(定期券・払戻) <span class="app-version">v20261126a</span></h1>
   <span>入力フォーム</span>
   <div class="btn-bar">
     <button class="btn-secondary" onclick="loadData()">📂 読み込む</button>
@@ -1066,7 +1068,7 @@ for (let i = 0; i < NUM_ROWS; i++) {
     <td><input type="text" id="category_${i}" placeholder="" oninput="this.value = toHalfWidthAlnum(this.value)"></td>
     <td data-acc><select class="tax-select" id="expense_cd_${i}">${expenseCdOptionsHtml('')}</select></td>
     <td data-acc><input type="text" id="memo_cd_${i}" placeholder=""></td>
-    <td class="amount-cell"><input type="number" id="amount_${i}" placeholder="0" min="0" step="1" oninput="updateTotal()"></td>
+    <td class="amount-cell"><input type="text" inputmode="numeric" autocomplete="off" class="amount-input" id="amount_${i}" placeholder="0" oninput="updateTotal()"></td>
   `;
   tbody.appendChild(tr);
 }
@@ -1085,7 +1087,7 @@ function formatYenAmount(str) {
   const formatted = formatNumberWithCommas(str);
   return formatted ? '￥' + formatted : '';
 }
-function onKessanAmountFocus(el) { el.value = el.value.replace(/[^0-9]/g, ''); }
+function onKessanAmountFocus(el) { setAmount(el, el.value); } // 「￥」を外してカンマ付きの数字に
 function onKessanAmountBlur(el)  { el.value = formatYenAmount(el.value); }
 function formatAllKessanAmounts() {
   for (let i = 0; i < KESSAN_ROWS; i++) {
@@ -1099,7 +1101,7 @@ for (let i = 0; i < KESSAN_ROWS; i++) {
   tr.innerHTML = `
     <td data-acc><input type="text" id="kessan_cd_${i}" placeholder="" readonly></td>
     <td data-acc><select id="kessan_name_${i}" onchange="onKessanNameChange(${i})">${buildKessanNameOptions()}</select></td>
-    <td class="amount-cell" data-acc><input type="text" inputmode="numeric" id="kessan_amount_${i}" placeholder="0" oninput="this.value = this.value.replace(/[^0-9]/g, '')" onfocus="onKessanAmountFocus(this)" onblur="onKessanAmountBlur(this)"></td>
+    <td class="amount-cell" data-acc><input type="text" inputmode="numeric" class="amount-input" id="kessan_amount_${i}" placeholder="0" onfocus="onKessanAmountFocus(this)" onblur="onKessanAmountBlur(this)"></td>
   `;
   kessanTbody.appendChild(tr);
 }
@@ -1119,12 +1121,12 @@ function setDefaultIssueDate() {
 setDefaultIssueDate();
 
 // ─── 合計計算 ────────────────────────────────────────────────
-function amountOf(i) {
-  return Math.max(0, Math.round(parseFloat(document.getElementById(`amount_${i}`)?.value) || 0));
+function rowAmountOf(i) {
+  return amountOf(`amount_${i}`);
 }
 function updateTotal() {
   let sum = 0;
-  for (let i = 0; i < NUM_ROWS; i++) sum += amountOf(i);
+  for (let i = 0; i < NUM_ROWS; i++) sum += rowAmountOf(i);
   document.getElementById('total-display').textContent = '￥' + sum.toLocaleString('ja-JP');
   return sum;
 }
@@ -1148,11 +1150,47 @@ function clearForm() {
 }
 
 // ─── 入力データの保存・読み込み ────────────────────────────
+// ─ 金額欄の桁区切り（振替伝票と同じ仕組み） ─
+// 金額欄（class="amount-input"）は文字の欄にして、入力しながらカンマを付ける。
+// 読むときは amountOf() で数字だけにする。保存JSONにはカンマなしの数字で入れる（以前の保存ファイルと互換）。
+function amountDigits(str) { return String(str ?? '').normalize('NFKC').replace(/[^0-9]/g, '').replace(/^0+(?=\d)/, ''); }
+function amountComma(digits) { return digits ? digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',') : ''; }
+function amountOf(elOrId) {
+  const el = typeof elOrId === 'string' ? document.getElementById(elOrId) : elOrId;
+  return Number(amountDigits(el && el.value)) || 0;
+}
+function isAmountInput(el) { return !!(el && el.classList && el.classList.contains('amount-input')); }
+// 値を入れるとき（プログラムから）もカンマ付きにする
+function setAmount(el, value) {
+  if (typeof el === 'string') el = document.getElementById(el);
+  if (el) el.value = amountComma(amountDigits(value));
+}
+// 入力中：カンマを付け直し、カーソルは「左にある数字の数」が同じ位置に戻す
+function reformatAmountInput(el) {
+  const before = el.value;
+  const caret = el.selectionStart ?? before.length;
+  const digitsLeft = amountDigits(before.slice(0, caret)).length;
+  const after = amountComma(amountDigits(before));
+  if (after === before) return;
+  el.value = after;
+  let pos = 0, seen = 0;
+  while (pos < after.length && seen < digitsLeft) { if (/\d/.test(after[pos])) seen++; pos++; }
+  try { el.setSelectionRange(pos, pos); } catch (e) {}
+}
+// 各欄の oninput（合計の計算など）より先にカンマを付け直す
+document.addEventListener('input', e => { if (isAmountInput(e.target)) reformatAmountInput(e.target); }, true);
+// 読み込み後などにカンマを付け直す（収支項目の金額は「￥」付きの表示を別に持つので除く）
+function formatAllAmountInputs() {
+  document.querySelectorAll('input.amount-input').forEach(el => { if (!/^kessan_amount_/.test(el.id)) setAmount(el, el.value); });
+}
+
 function collectFormData() {
   const data = { __app: 'deposit-slip', __attachedFiles: attachedFiles };
   document.querySelectorAll('.container input, .container select, .container textarea').forEach(el => {
     if (!el.id || el.type === 'file') return;
-    data[el.id] = (el.type === 'checkbox') ? el.checked : el.value;
+    data[el.id] = (el.type === 'checkbox') ? el.checked : 
+      (isAmountInput(el) && !/^kessan_amount_/.test(el.id)) ? amountDigits(el.value) // 金額はカンマなしで保存（以前の保存ファイルと同じ形）
+      : el.value;
   });
   data.__stampColor = getStampColor();
   return data;
@@ -1180,6 +1218,7 @@ function applyFormData(data) {
   updateTotal();
   redrawStampPreview();
   onOfficeChange(); // 事業所CDは事業所名から入れ直す（保存データ・テンプレートに残っている旧コード対策）
+  formatAllAmountInputs(); // 金額欄にカンマを付ける
 }
 
 // 保存・PDF出力時のファイル名候補: 入金伝票_得意先_発行日(YYMMDD)_起票者の苗字（未入力の部分は省略）
@@ -1268,7 +1307,7 @@ const MAX_DIGITS = AMOUNT_CELLS_X.length; // 金額欄は8桁
 function exportProblems() {
   const msgs = [];
   for (let i = 0; i < NUM_ROWS; i++) {
-    if (String(amountOf(i)).length > MAX_DIGITS) msgs.push(`${i + 1}行目の金額が8桁を超えています。`);
+    if (String(rowAmountOf(i)).length > MAX_DIGITS) msgs.push(`${i + 1}行目の金額が8桁を超えています。`);
   }
   if (String(updateTotal()).length > MAX_DIGITS) msgs.push('合計が8桁を超えています。');
   if (getStampEnabled() && v('issuer') && !splitIssuerName(v('issuer'))) msgs.push('発行者名は苗字と名前の間にスペースを入れて入力してください（例：佐藤 太郎）。');
@@ -1503,7 +1542,7 @@ async function buildPdfBytes(withCopy, statusEl) {
       cell('category', toHalfWidthAlnum(gv(`category_${i}`)), 'center', 2);
       cell('expense_cd', expenseCdLabel(gv(`expense_cd_${i}`)), 'center', 2);
       cell('memo_cd',  gv(`memo_cd_${i}`), 'center', 2);
-      const amt = amountOf(i);
+      const amt = rowAmountOf(i);
       if (amt > 0) drawDigits(amt, yTop, yBottom, false);
     }
 
@@ -1825,7 +1864,7 @@ function applyLedgerSelection(idx) {
     document.getElementById(`customer_${i}`).value = i === 0 ? r.name : '';
     document.getElementById(`summary_${i}`).value = lines[i] || '';
     document.getElementById(`job_no_${i}`).value = i === 0 ? r.job : '';
-    document.getElementById(`amount_${i}`).value = i === 0 ? (r.amount || '') : '';
+    setAmount(`amount_${i}`, i === 0 ? (r.amount || '') : '');
   }
   updateTotal();
 
